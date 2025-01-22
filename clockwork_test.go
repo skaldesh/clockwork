@@ -3,6 +3,7 @@ package clockwork
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -208,4 +209,55 @@ func TestFakeClockRace(t *testing.T) {
 	go func() { fc.NewTicker(d) }()
 	go func() { fc.NewTimer(d) }()
 	go func() { fc.Sleep(d) }()
+}
+
+func TestFakeClockAck(t *testing.T) {
+	t.Parallel()
+	fc := NewFakeClock()
+
+	count := atomic.Int32{}
+	fc.AfterFunc(time.Second, func() {
+		count.Add(1)
+		fc.Ack()
+	})
+	fc.AfterFunc(time.Second*2, func() {
+		count.Add(1)
+		fc.Ack()
+	})
+	fc.AfterFunc(time.Second*3, func() {
+		count.Add(1)
+		fc.Ack()
+	})
+
+	// Cancel context after 500ms.
+	ctx, cancel := context.WithCancel(context.Background())
+	fc.AfterFunc(time.Millisecond*500, cancel)
+
+	// Advance, and test that the context cancels the Wait.
+	go fc.Advance(time.Millisecond * 500)
+
+	err := fc.WaitAck(ctx, 1)
+	if err != context.Canceled {
+		t.Errorf("fc.WaitAck returned unexpected error: %v", err)
+	}
+
+	// Advance to trigger the first count.Add.
+	go fc.Advance(time.Second)
+
+	err = fc.WaitAck(context.Background(), 1)
+	if err != nil {
+		t.Errorf("fc.WaitAck returned unexpected error: %v", err)
+	} else if c := count.Load(); c != 1 {
+		t.Errorf("expected count to be 1, was %d", c)
+	}
+
+	// Advance to trigger the remaining two count.Adds.
+	go fc.Advance(2 * time.Second)
+
+	err = fc.WaitAck(context.Background(), 2)
+	if err != nil {
+		t.Errorf("fc.WaitAck returned unexpected error: %v", err)
+	} else if c := count.Load(); c != 3 {
+		t.Errorf("expected count to be 3, was %d", c)
+	}
 }

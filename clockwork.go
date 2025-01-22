@@ -20,6 +20,12 @@ type Clock interface {
 	NewTicker(d time.Duration) Ticker
 	NewTimer(d time.Duration) Timer
 	AfterFunc(d time.Duration, f func()) Timer
+
+	// Change by @skaldesh:
+	// Ack is a mechanism for routines to acknowledge they finished a piece of work.
+	// This can be useful when testing concurrent code to ensure it has reached a certain state.
+	// For the real clock, this is a no-op.
+	Ack()
 }
 
 // NewRealClock returns a Clock which simply delegates calls to the actual time
@@ -62,6 +68,9 @@ func (rc *realClock) AfterFunc(d time.Duration, f func()) Timer {
 	return realTimer{time.AfterFunc(d, f)}
 }
 
+// Change by @skaldesh:
+func (rc *realClock) Ack() {}
+
 // FakeClock provides an interface for a clock which can be manually advanced
 // through time.
 //
@@ -76,6 +85,9 @@ type FakeClock struct {
 	waiters  []expirer
 	blockers []*blocker
 	time     time.Time
+
+	// Change by @skaldesh
+	ack chan struct{}
 }
 
 // NewFakeClock returns a FakeClock implementation which can be
@@ -91,6 +103,8 @@ func NewFakeClock() *FakeClock {
 func NewFakeClockAt(t time.Time) *FakeClock {
 	return &FakeClock{
 		time: t,
+		// Change by @skaldesh
+		ack: make(chan struct{}),
 	}
 }
 
@@ -173,6 +187,26 @@ func (fc *FakeClock) NewTimer(d time.Duration) Timer {
 func (fc *FakeClock) AfterFunc(d time.Duration, f func()) Timer {
 	t, _ := fc.newTimer(d, f)
 	return t
+}
+
+// Change by @skaldesh
+func (rc *FakeClock) Ack() {
+	rc.ack <- struct{}{}
+}
+
+// Change by @skaldesh
+func (rc *FakeClock) WaitAck(ctx context.Context, n int) error {
+	var ackReceived int
+	for ackReceived < n {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-rc.ack:
+			ackReceived++
+		}
+	}
+	return nil
 }
 
 // newTimer returns a new timer using an optional afterFunc and the time that
