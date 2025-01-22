@@ -1,3 +1,3 @@
-module github.com/jonboulle/clockwork
+module github.com/skaldesh/clockwork
 
 go 1.21
